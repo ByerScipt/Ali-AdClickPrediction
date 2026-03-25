@@ -1,5 +1,4 @@
 .codex/
-
-# Local datasets and generated tables
 data/raw_data/*.csv
 data/processed_data/*.csv
+INTERVIEW_NOTES.md
