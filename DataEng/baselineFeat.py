@@ -13,6 +13,9 @@ user_path = "user_profile.csv"
 
 # 读数据
 sample = pd.read_csv(file_path+sample_path,nrows=100000)
+# 只保留使用的特征列
+sample = sample[['time_stamp','clk','pid','user','adgroup_id']]
+
 ad = pd.read_csv(file_path+ad_path)
 usr = pd.read_csv(file_path+user_path)
 usr.columns = usr.columns.str.strip()  # 清除new_user_class_level名称后的一个空格
@@ -21,16 +24,30 @@ print(f"初始sample的形状{sample.shape}")
 # 合并广告和用户特征
 sample = sample.merge(ad,on='adgroup_id',how='left')
 sample = sample.merge(usr,left_on='user',right_on='userid',how='left')
-sample = sample.drop(columns=['userid','nonclk'])
+keep_cols = ['time_stamp','clk','pid','user','adgroup_id','cate_id','cms_group_id','cms_segid','final_gender_code','occupation','age_level','shopping_level','brand','price','pvalue_level','new_user_class_level']
+sample = sample[keep_cols]
 print(f"\n合并广告和用户特征后的形状{sample.shape}")
 print(f"合并广告和用户特征后的字段{sample.columns}")
 print(f"数据类型：\n{sample.dtypes}")
 
 # 处理缺失
 print(f"\n数据缺失率：\n{sample.isna().mean().sort_values(ascending=False)}")
-cols = ['pvalue_level','new_user_class_level','brand','cms_segid','occupation','shopping_level','age_level','final_gender_code','cms_group_id']
+cols = ['cms_segid','pvalue_level','new_user_class_level','brand','occupation','shopping_level','age_level','final_gender_code','cms_group_id']
 sample[cols] = sample[cols].fillna(-1)
+
+# 提取时间信息
+time_stamp = pd.to_datetime(sample['time_stamp'],unit='s')
+sample['hour'] = time_stamp.dt.hour
+sample['weekday'] = time_stamp.dt.weekday
+sample['date'] = time_stamp.dt.date
+sample = sample.drop(columns=['time_stamp'])
+
+# 将缺失类别建模成未知类别
+sample[['brand','occupation','cms_group_id','final_gender_code','cms_segid']] += 1
+
+# 将pid映射成整数类别
+sample['pid'] = sample['pid'].astype('category').cat.codes
 
 # 保存
 Path('../data/processed_data').mkdir(parents=True,exist_ok=True)
-sample.to_csv('../data/processed_data/smallConcatSample.csv')
+sample.to_parquet('../data/processed_data/baselineSample.parquet',index=False)
