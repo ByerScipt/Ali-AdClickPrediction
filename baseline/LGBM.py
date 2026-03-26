@@ -19,7 +19,7 @@ valid_data = valid_data.drop(columns=['date'])
 # print(f"验证集形状{valid_data.shape}，平均点击率{valid_data['clk'].mean()}")
 
 # 进一步切分类别、等级和标签
-choice = 1
+choice = 3
 if choice == 1:
     cate_cols = ['cms_segid','hour','weekday','pid','cate_id','cms_group_id','final_gender_code','occupation','brand']
     num_cols = ['price','age_level','shopping_level','pvalue_level','new_user_class_level']
@@ -45,10 +45,11 @@ from lightgbm import LGBMClassifier
 from sklearn.metrics import roc_auc_score,log_loss
 
 print("开始训练LGBM模型...")
-n_estimators = 32
-model = LGBMClassifier(objective='binary', random_state=13, n_estimators=n_estimators,learning_rate=0.1, num_leaves=3)
+n_estimators = 34
+num_leaves = 3
+model = LGBMClassifier(objective='binary', random_state=13, n_estimators=n_estimators,learning_rate=0.1, num_leaves=num_leaves, verbosity=-100)
 model.fit(x_train,y_train,categorical_feature=cate_cols)
-print(f"模型训练完成，树个数为{n_estimators}")
+print(f"模型训练完成，树个数为{n_estimators}, 每棵树最大叶子结点数{num_leaves}\n")
 
 y_predict = model.predict_proba(x_valid)
 score = roc_auc_score(y_true=y_valid,y_score=y_predict[:,1]) # type: ignore
