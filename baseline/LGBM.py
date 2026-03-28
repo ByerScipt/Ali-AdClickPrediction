@@ -6,7 +6,7 @@ import pandas as pd
 
 # 读取
 print("数据读取与处理...")
-file_path = "../data/processed_data/baselineSample.parquet"
+file_path = "../data/processed_data/LGBMSample.parquet"
 data = pd.read_parquet(file_path)
 
 # 切分训练集和验证集，而后删去date
@@ -19,16 +19,13 @@ valid_data = valid_data.drop(columns=['date'])
 # print(f"验证集形状{valid_data.shape}，平均点击率{valid_data['clk'].mean()}")
 
 # 进一步切分类别、等级和标签
-choice = 3
-if choice == 1:
-    cate_cols = ['cms_segid','hour','weekday','pid','cate_id','cms_group_id','final_gender_code','occupation','brand']
-    num_cols = ['price','age_level','shopping_level','pvalue_level','new_user_class_level']
-elif choice == 2:
-    cate_cols = ['cms_segid','hour','weekday','pid','cate_id','cms_group_id','final_gender_code','occupation']
-    num_cols = ['age_level','shopping_level','pvalue_level','new_user_class_level']
-else:
+choice = 2
+if choice == 1: # 去掉用户侧高缺失率特征，加入历史特征（当前最佳baseline）
     cate_cols = ['hour','weekday','pid','cate_id','cms_group_id','final_gender_code','occupation','brand']
-    num_cols = ['price','age_level','shopping_level']
+    num_cols = ['user_hist_ctr','user_hist_clk','user_hist_imp','ad_hist_clk','ad_hist_imp','price','age_level','shopping_level']
+else: # 当前最佳baseline+user_cate历史特征
+    cate_cols = ['hour','weekday','pid','cate_id','cms_group_id','final_gender_code','occupation','brand']
+    num_cols = ['user_cate_hist_imp','user_cate_hist_clk','user_cate_hist_ctr','user_hist_ctr','user_hist_clk','user_hist_imp','ad_hist_clk','ad_hist_imp','price','age_level','shopping_level']
 
 feat_cols = cate_cols + num_cols # type: ignore
 x_train = train_data[feat_cols]
@@ -45,7 +42,7 @@ from lightgbm import LGBMClassifier
 from sklearn.metrics import roc_auc_score,log_loss
 
 print("开始训练LGBM模型...")
-n_estimators = 34
+n_estimators = 45
 num_leaves = 3
 model = LGBMClassifier(objective='binary', random_state=13, n_estimators=n_estimators,learning_rate=0.1, num_leaves=num_leaves, verbosity=-100)
 model.fit(x_train,y_train,categorical_feature=cate_cols)
