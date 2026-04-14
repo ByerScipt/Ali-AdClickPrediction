@@ -71,4 +71,4 @@ sample['pid'] = sample['pid'].astype('category').cat.codes
 
 # 保存
 Path('../data/processed_data').mkdir(parents=True,exist_ok=True)
-sample.to_parquet('../data/processed_data/LGBMSample.parquet',index=False)
+sample.to_parquet('../data/sample/LGBMSample.parquet',index=False)

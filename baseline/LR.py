@@ -7,7 +7,7 @@ import pandas as pd
 
 # 读取
 print("数据读取与处理...")
-file_path = "../data/processed_data/LRSample.csv"
+file_path = "../data/sample/LRSample.csv"
 data = pd.read_csv(file_path)
 
 # 提取时间信息

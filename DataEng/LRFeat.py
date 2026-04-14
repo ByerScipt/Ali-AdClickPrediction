@@ -33,4 +33,4 @@ sample[cols] = sample[cols].fillna(-1)
 
 # 保存
 Path('../data/processed_data').mkdir(parents=True,exist_ok=True)
-sample.to_csv('../data/processed_data/LRSample.csv')
+sample.to_csv('../data/sample/LRSample.csv')

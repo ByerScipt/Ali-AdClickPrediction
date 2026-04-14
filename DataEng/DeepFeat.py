@@ -69,4 +69,4 @@ for feat in sparse_feat:
 
 # 保存
 Path('../data/processed_data').mkdir(parents=True,exist_ok=True)
-sample.to_parquet('../data/processed_data/WideDeepSample.parquet',index=False)
+sample.to_parquet('../data/sample/DeepSample.parquet',index=False)

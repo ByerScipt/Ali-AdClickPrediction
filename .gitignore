@@ -1,4 +1,5 @@
 .codex/
-data/raw_data/*.csv
+data/raw_data/*
 data/processed_data/*
+data/sample/*
 INTERVIEW_NOTES.md

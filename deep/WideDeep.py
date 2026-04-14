@@ -6,7 +6,7 @@ from sklearn.metrics import roc_auc_score,log_loss
 
 # 读取
 print("数据读取与处理...")
-file_path = "../data/processed_data/WideDeepSample.parquet"
+file_path = "../data/sample/DeepSample.parquet"
 data = pd.read_parquet(file_path)
 
 # 拆分稀疏与稠密特征

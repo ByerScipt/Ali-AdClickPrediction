@@ -6,7 +6,7 @@ import pandas as pd
 
 # 读取
 print("数据读取与处理...")
-file_path = "../data/processed_data/LGBMSample.parquet"
+file_path = "../data/sample/LGBMSample.parquet"
 data = pd.read_parquet(file_path)
 
 # 切分训练集和验证集，而后删去date
