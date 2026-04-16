@@ -16,9 +16,10 @@ data = data.sort_values('time_stamp').reset_index(drop=True) # 按时间升序
 # 字段分组
 target_cols = ['cate_id','brand']
 hist_cols = {'cate_id': 'hist_cate_seq','brand': 'hist_brand_seq'} # 建立索引，后续共享Embedding
-sparse_cols = ['user','adgroup_id', 'pid', 'cms_group_id', 'cms_segid', 'final_gender_code',
-                'occupation', 'hour', 'weekday']
-dense_cols = ['price', 'age_level', 'shopping_level']
+sparse_cols = ['adgroup_id', 'pid', 'cate_id', 'brand','cms_group_id', 'cms_segid', 'final_gender_code',
+                'occupation', 'gender_cate_cross', 'hour', 'weekday']
+dense_cols = ['price', 'age_level', 'shopping_level','ad_hist_imp', 'ad_hist_clk','user_hist_imp', 'user_hist_clk', 
+              'user_hist_ctr','user_cate_hist_imp', 'user_cate_hist_clk', 'user_cate_hist_ctr']
 
 # 时间切分
 date_list = sorted(data['date'].astype(str).unique())
@@ -56,6 +57,7 @@ for target_col,hist_col in hist_cols.items():
 
 # sparse特征编码
 for col in sparse_cols:
+    if col in target_cols: continue
     vocab = build_vocab(train_df[col])
     train_df[col] = encode_scalar(train_df[col], vocab)
     valid_df[col] = encode_scalar(valid_df[col], vocab)
@@ -77,50 +79,44 @@ for col in sparse_cols: # 统计每个sparse字段的最大编号，用来确定
 for target_col in target_cols:
     vocab_sizes[target_col] = len(shared_vocabs[target_col]) + 2
 
-# 开始构建DIN
-class DIN(nn.Module):
-    def __init__(self,vocab_sizes,emb_dim=8):
+
+class CrossLayer(nn.Module):
+    def __init__(self,input_dim,rank):
+        super().__init__()
+        self.v = nn.Linear(input_dim,rank,bias=False)
+        self.u = nn.Linear(rank,input_dim,bias=True)
+        
+    def forward(self,x0,xl):
+        # x_{L+1} = x0 ⊙ (W_l*x_L + b_L) + x_L
+        return x0 * self.u(self.v(xl)) + xl 
+    
+class DIN_DCN(nn.Module):
+    def __init__(self,vocab_sizes,emb_dim=8,num_cross_layers=2,hidden_dims=(64,32),dropout=0.2,rank=32):
         super().__init__()
         self.emb_dim = emb_dim
-        self.beh_dim = emb_dim * len(target_cols)
         # self.embedding用来存储每个特征的向量表
         self.embedding = nn.ModuleDict()
         for col,size in vocab_sizes.items():
             self.embedding[col] = nn.Embedding(size,emb_dim,padding_idx=0)
         # Attention MLP
-        self.attn_fc1 = nn.Linear(self.beh_dim*4,80)
-        self.attn_fc2 = nn.Linear(80,40)
-        self.attn_fc3 = nn.Linear(40,1)
-        # DNN
-        self.fc1 = nn.Linear(len(sparse_cols)*emb_dim + 2*self.beh_dim + len(dense_cols),200)
-        self.fc2 = nn.Linear(200,80)
-        self.fc3 = nn.Linear(80,1)
-        self.prelu1 = nn.PReLU()
-        self.prelu2 = nn.PReLU()
-        self.dropout = nn.Dropout(0.2)
-        self.reg_lambda = 1e-5
-    
-    def combineBehavior(self,emb_list):
-        return torch.cat(emb_list,dim=-1)
-    
-    def batch_l2(self,x):
-        reg = self.embedding[target_cols[0]].weight.new_tensor(0.0)
-        for col in sparse_cols:
-            ids = x[col].reshape(-1)
-            ids = ids[ids!=0]
-            ids = ids.unique()
-            reg += self.embedding[col].weight[ids].pow(2).sum()
-        for col in target_cols:
-            target_ids = x[col].reshape(-1)
-            hist_ids = x[hist_cols[col]].reshape(-1)
-            ids = torch.cat([target_ids, hist_ids],dim=0)
-            ids = ids[ids!=0]
-            ids = ids.unique()
-            reg += self.embedding[col].weight[ids].pow(2).sum()
-        batch_size = x['seq_len'].size(0)
-        return self.reg_lambda * reg / batch_size
-
-
+        self.attn_fc1 = nn.Linear(emb_dim*4,32)
+        self.attn_fc2 = nn.Linear(32,1)
+        self.relu = nn.ReLU()
+        # DCN
+        # input总维度的来源：[len(sparse_cols)-len(target_cols)] + [len(target_cols)] + [len(target_cols)] + [len(dense_cols)]
+        self.input_dim = (len(sparse_cols) + len(target_cols)) * emb_dim + len(dense_cols)
+        self.cross_layers = nn.ModuleList([CrossLayer(self.input_dim,rank) for _ in range(num_cross_layers)])
+        deep_layers = []
+        cur_dim = self.input_dim
+        for hdim in hidden_dims:
+            deep_layers.append(nn.Linear(cur_dim,hdim))
+            deep_layers.append(nn.ReLU())
+            deep_layers.append(nn.Dropout(dropout))
+            cur_dim = hdim
+        self.deep_net = nn.Sequential(*deep_layers)
+        self.fusion_fc = nn.Linear(self.input_dim+cur_dim,cur_dim)
+        self.dropout = nn.Dropout(dropout)
+        self.output_layer = nn.Linear(cur_dim,1)
     
     def activateInterest(self,target_emb,hist_emb,seq_len):
         ''' DIN最核心的创新：构造用户兴趣向量'''
@@ -128,14 +124,11 @@ class DIN(nn.Module):
         target_emb = target_emb.unsqueeze(1).expand(-1,max_len,-1) # 将target_emb从[B,E]变为[B,L,E]，每一个L的位置其实还是同一个向量
         attn_input = torch.cat([target_emb,hist_emb,target_emb-hist_emb,target_emb*hist_emb],dim=-1) # 显式构建差异和交叉
         # 根据历史序列和当前商品打分
-        attn_hidden = torch.sigmoid(self.attn_fc1(attn_input))
-        attn_hidden = torch.sigmoid(self.attn_fc2(attn_hidden))
-        score = self.attn_fc3(attn_hidden).squeeze(-1)
+        score = self.attn_fc2(self.relu(self.attn_fc1(attn_input))).squeeze(-1)
         # 序列mask，超出实际序列长度的部分置为false
         mask = torch.arange(max_len,device=seq_len.device).unsqueeze(0) < seq_len.unsqueeze(1)
-        score = score / (self.beh_dim ** 0.5)
-        score = score.masked_fill(~mask,-1e9) # 把padding位置替换为极小值
-        weight = torch.softmax(score, dim=1)
+        score = score.masked_fill(~mask,-1e9) # 把padding位置替换为极小值，后续softmax后便可当成0
+        weight = torch.softmax(score,dim=1)
         interest = torch.sum(hist_emb*weight.unsqueeze(-1),dim=1)
         return interest
     
@@ -147,22 +140,27 @@ class DIN(nn.Module):
         target_embs = {}
         for col in target_cols:
             target_embs[col] = self.embedding[col](x[col])
-        target_beh_emb = self.combineBehavior([target_embs[col] for col in target_cols])
-        hist_beh_emb = self.combineBehavior([self.embedding[col](x[hist_cols[col]]) for col in target_cols])
-        interest_emb = self.activateInterest(
-            target_beh_emb,
-            hist_beh_emb,
-            x['seq_len']
-        )
+        interest_embs = {}
+        for target_col,hist_col in hist_cols.items():
+            interest_embs[target_col] = self.activateInterest(
+                target_embs[target_col],
+                self.embedding[target_col](x[hist_col]),
+                x['seq_len']
+            )
         # 合并每个特征向量
         sparse_stack = torch.cat(sparse_embs,dim=1) # dim=1的意思是按照第一维开始拼接，跳过Batch这个第零维
-        target_stack = target_beh_emb
-        interest_stack = interest_emb
+        target_stack = torch.cat([target_embs[col] for col in target_cols],dim=1)
+        interest_stack = torch.cat([interest_embs[col] for col in target_cols],dim=1)
         dense_stack = torch.stack([x[col] for col in dense_cols],dim=1).float()
-        dnn_input = torch.cat([sparse_stack,target_stack,interest_stack,dense_stack],dim=1)
-        hidden = self.dropout(self.prelu1(self.fc1(dnn_input)))
-        hidden = self.dropout(self.prelu2(self.fc2(hidden)))
-        logit = self.fc3(hidden).squeeze(-1)
+        x0 = torch.cat([sparse_stack,target_stack,interest_stack,dense_stack], dim=1)
+        x_cross = x0
+        for cross_layer in self.cross_layers:
+            x_cross = cross_layer(x0, x_cross)
+        x_deep = self.deep_net(x0)
+        fusion_input = torch.cat([x_cross,x_deep],dim=1)
+        fusion_hidden = self.relu(self.fusion_fc(fusion_input))
+        fusion_hidden = self.dropout(fusion_hidden)
+        logit = self.output_layer(fusion_hidden).squeeze(-1)
         return logit
     
 class DINDataset(Dataset):
@@ -182,7 +180,7 @@ class DINDataset(Dataset):
         row = self.df.iloc[index]
         y = torch.tensor(row['clk'],dtype=torch.float32)
         x = {}
-        for col in sparse_cols+target_cols:
+        for col in sparse_cols:
             x[col] = torch.tensor(row[col],dtype=torch.long)
         for col in hist_cols.values():
             x[col] = torch.tensor(self.padding(row[col]),dtype=torch.long)
@@ -202,9 +200,13 @@ test_loader = DataLoader(test_dataset,batch_size=256,shuffle=False)
 SEED = 42
 torch.manual_seed(SEED)
 
-model = DIN(
+model = DIN_DCN(
     vocab_sizes=vocab_sizes,
-    emb_dim=8
+    emb_dim=8,
+    num_cross_layers=2,
+    hidden_dims=(64,32),
+    dropout=0.2,
+    rank=32
 )
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -245,17 +247,11 @@ for epoch in range(1,epochs+1):
         y = y.to(device)
         optimizer.zero_grad()
         logit = model(x)
-        base_loss = criterion(logit,y) 
-        reg_loss = model.batch_l2(x)
-        loss = base_loss + reg_loss
+        loss = criterion(logit,y)
         loss.backward()
         optimizer.step()
         train_loss_sum += loss.item() * y.size(0)
-        pbar.set_postfix(
-            base=f"{base_loss.item():.4f}",
-            reg=f"{reg_loss.item():.6f}",
-            total=f"{loss.item():.4f}"
-        )
+        pbar.set_postfix(loss=f"{loss.item():.4f}")
     train_loss = train_loss_sum / len(train_loader.dataset) # type: ignore
     val_loss,val_auc,val_logloss = evaluate(model,valid_loader,criterion,device)
     print(

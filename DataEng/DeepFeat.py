@@ -34,7 +34,7 @@ cols = ['cms_segid','brand','occupation','shopping_level','age_level','final_gen
 sample[cols] = sample[cols].fillna(-1)
 
 # 提取时间信息
-time_stamp = pd.to_datetime(sample['time_stamp'],unit='s')
+time_stamp = pd.to_datetime(sample['time_stamp'],unit='s',utc=True).dt.tz_convert('Asia/Shanghai')
 sample['hour'] = time_stamp.dt.hour
 sample['weekday'] = time_stamp.dt.weekday
 sample['date'] = time_stamp.dt.date

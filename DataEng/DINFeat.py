@@ -15,7 +15,7 @@ beh_path = "../data/processed_data/behavior_log.parquet"
 
 # 用户行为只截取最近100条，减少运算量
 # 根据数据分析，每个曝光样本对应用户在曝光时间之前的历史序列长度中位数为482
-max_beh_len = 100  
+max_beh_len = 220
 
 sample = pd.read_csv(file_path+sample_path,nrows=100000)
 sample = sample[['time_stamp','clk','pid','user','adgroup_id']]  # 依旧去掉没用的nonclk特征
@@ -38,7 +38,7 @@ cols = ['cms_segid','brand','occupation','shopping_level','age_level','final_gen
 sample[cols] = sample[cols].fillna(-1)
 
 # 提取时间信息
-time_stamp = pd.to_datetime(sample['time_stamp'],unit='s')
+time_stamp = pd.to_datetime(sample['time_stamp'],unit='s',utc=True).dt.tz_convert('Asia/Shanghai')
 sample['hour'] = time_stamp.dt.hour
 sample['weekday'] = time_stamp.dt.weekday
 sample['date'] = time_stamp.dt.date
@@ -75,7 +75,7 @@ print("-------读取并处理行为日志-------")
 
 # 使用DuckDB做过滤，只保留sample中出现的用户的行为序列
 sample_user = set(sample['user'].unique())
-beh_sub_path = Path(processed_path) / f"behavior_log_din_{len(sample)}_{len(sample_user)}.parquet"
+beh_sub_path = Path(processed_path) / f"behavior_log_pv_{len(sample)}_{len(sample_user)}.parquet"
 
 if not beh_sub_path.exists():
     print("使用DuckDB预过滤行为日志...")
@@ -88,6 +88,7 @@ if not beh_sub_path.exists():
             FROM read_parquet('{Path(beh_path).resolve()}') AS b
             INNER JOIN sample_user_df AS u
             ON b.user = u.user
+            WHERE b.btag = 'pv'
             ORDER BY b.user, b.time_stamp
         ) TO '{beh_sub_path.resolve()}' (FORMAT PARQUET)
     """)
@@ -102,7 +103,7 @@ dataset = ds.dataset(beh_sub_path, format='parquet')
 hist_beh = defaultdict(list)
 hist_time = defaultdict(list)
 scanner = dataset.scanner(
-    columns=['user', 'time_stamp', 'btag', 'cate', 'brand'],
+    columns=['user', 'time_stamp', 'cate', 'brand'],
     batch_size=100000
 )
 for batch_id, batch in enumerate(scanner.to_batches(), start=1):
@@ -116,8 +117,7 @@ for batch_id, batch in enumerate(scanner.to_batches(), start=1):
             zip(
                 time_list,
                 group['cate'].tolist(),
-                group['brand'].tolist(),
-                group['btag'].tolist()
+                group['brand'].tolist()
             )
         )
     if batch_id % 200 == 0:
@@ -137,11 +137,9 @@ for _,row in sample.iterrows():
     # 合并行为序列信息
     hist_cate_seq = [e[1] for e in recent_beh]
     hist_brand_seq = [e[2] for e in recent_beh]
-    hist_btag_seq = [e[3] for e in recent_beh]
     seq_rows.append({
         'hist_cate_seq': hist_cate_seq,
         'hist_brand_seq': hist_brand_seq,
-        'hist_btag_seq': hist_btag_seq,
         'seq_len': len(recent_beh)
     })
 print("行为序列构造完成！")  
