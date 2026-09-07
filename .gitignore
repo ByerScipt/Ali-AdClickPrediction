@@ -1,5 +1,3 @@
-.codex/
-data/raw_data/*
-data/processed_data/*
-data/sample/*
-INTERVIEW_NOTES.md
+data/
+outputs/
+__pycache__/
